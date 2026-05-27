@@ -4,6 +4,26 @@ const twilio    = require('twilio');
 const Anthropic = require('@anthropic-ai/sdk');
 const axios     = require('axios');
 const fetch     = require('node-fetch');
+const fs        = require('fs');
+const path      = require('path');
+
+// ── MEMORIA PERSISTENTE (archivo JSON local) ──────────────────────────────────
+const MEMORIA_FILE = path.join('/tmp', 'harka-memoria.json');
+
+function cargarMemoria() {
+  try {
+    if (fs.existsSync(MEMORIA_FILE)) {
+      return JSON.parse(fs.readFileSync(MEMORIA_FILE, 'utf8'));
+    }
+  } catch(e) {}
+  return { historiales: {}, notas: [] };
+}
+
+function guardarMemoria(data) {
+  try { fs.writeFileSync(MEMORIA_FILE, JSON.stringify(data, null, 2)); } catch(e) {}
+}
+
+let MEMORIA = cargarMemoria();
 
 const app    = express();
 const phone  = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -92,9 +112,71 @@ COMANDOS ESPECIALES
 /calendario → plan de 7 días de contenido basado en tendencias actuales
 /copy [idea] → copy listo para publicar
 /imagen [descripción] → generar imagen con identidad Harkana
+/nota [texto] → guardar una nota o instrucción permanente
 /reset → limpiar conversación
 
-Respondé siempre en español rioplatense. Sos directo, creativo y proactivo. Máximo 400 palabras, pero si tenés mucho para decir, dividilo en mensajes.`;
+Respondé siempre en español rioplatense. Sos directo, creativo y proactivo. Máximo 400 palabras, pero si tenés mucho para decir, dividilo en mensajes.
+
+═══════════════════════════════════════
+BIBLIOTECA DE ASSETS DISPONIBLES
+═══════════════════════════════════════
+El usuario tiene estos archivos listos para usar en contenido.
+Cuando sugiereas qué publicar, referenciá estos assets concretos:
+
+PACKAGING / PRODUCTO:
+• paquete-sinfondo.png — bolsa kraft 500g sobre fondo transparente (ideal para composiciones)
+• DISEÑO PACK 500GR (1) y (2).JPEG — fotos oficiales del packaging 500g
+• nuevas packaging de 500gr.jpg — packaging actualizado
+• HARKANA MAYORISTA — imagen para comunicación mayorista
+
+FOTOS DE PRODUCTO / LIFESTYLE:
+• FOTO PARA INICIO PAGINA WEB.JPEG y FOTO PARA INICIO PAGINA WEB 2.JPEG — fotos hero de alta calidad
+• FOTO_INICIO_1.JPEG y FOTO_INICIO_2.JPEG — fotos principales del sitio web
+• foto galeria 1 al 10 — galería completa del producto en contexto
+• Yerba Mate Minimalis.jpeg / (1).jpeg — fotos minimalistas de yerba
+
+FOTOS DE CLIENTES:
+• CLIENTES- CON MATE HARKANA.JPEG — cliente real tomando mate con Harkana
+• CLIENTESS.JPEG, clientes 1-8.JPEG — múltiples fotos de clientes
+• cleintes.JPEG, clietnes 10.JPEG — más fotos de clientes reales
+
+PROCESO / ARTESANAL:
+• proceso de embolsado- paso 1.JPEG — manos embolsando yerba
+• proceso de embolsado- paso 2 terminacion.JPEG — proceso terminado
+• REPARTOS POR ENCARGUE.JPEG — primeros repartos (historia de marca)
+• primeros repartos.JPEG — historia de la marca
+
+HISTORIA DE LA MARCA:
+• Historia Harkana.jpeg — foto histórica de la marca
+• PRIMERAS HISTORIAS REDES SOCIALES.JPEG — primeras publicaciones
+• HACIAMOS PEDIDOS POR ENCARGUE.JPEG — origen artesanal
+• PRIMER CONTACTO CON EL PUBLICO EN FERIA ARTESANAL.png — primera feria
+• HARKANA EN EVENTOS- QUINTO CONCURSO DE ASADORES.jpeg — eventos
+
+DISTRIBUCIÓN / MAYORISTA:
+• DEPOSITO SUPERMERCADO.JPEG — Harkana en góndola de supermercado
+• deposito harkana- stock infinito.png — stock del depósito
+• CAMBIO FOTO 6 DE GONDOLA.JPEG — foto en góndola
+
+FONDOS / BACKGROUNDS:
+• FONDO PARA HISTORIA REDES SOCIALES.JPEG — fondo oscuro para stories
+• fondos para creacion de contenido (1) y (2).JPG — fondos para contenido
+• fondos para historias redes sociales (1) y (2).JPEG — fondos para stories
+
+VIDEOS DISPONIBLES:
+• VIDEO1.MOV (17 seg) — video principal del producto/proceso
+• VIDEO2.MOV (3.6 seg) — video corto de producto
+• caracteristicas de la yerba.MP4 — características del producto
+• HISTORIA.mp4 — historia de la marca
+• proceso de embolsado en video — proceso artesanal
+• Videos de WhatsApp (varios, marzo-abril 2026) — contenido espontáneo
+
+LOGOS:
+• LOGO FINAL.jpeg, LOGO oficial harkana.jpeg — logos oficiales
+• HARKANA.png — logo principal
+• logo 1.PNG, nuevo logo.jpg — variantes del logo
+
+Cuando el usuario te pida contenido, SIEMPRE sugerí qué asset específico usar y por qué.`;
 
 // ── HERRAMIENTAS (TOOLS) ──────────────────────────────────────────────────────
 const TOOLS = [
@@ -238,12 +320,25 @@ async function ejecutarTool(nombre, input) {
   }
 }
 
-// ── HISTORIAL POR USUARIO ─────────────────────────────────────────────────────
+// ── HISTORIAL POR USUARIO (persistente) ──────────────────────────────────────
 const historiales = new Map();
 
 function getHist(user) {
-  if (!historiales.has(user)) historiales.set(user, []);
+  if (!historiales.has(user)) {
+    // Cargar desde memoria persistente
+    const saved = MEMORIA.historiales[user] || [];
+    historiales.set(user, saved.slice(-20)); // últimos 20 mensajes
+  }
   return historiales.get(user);
+}
+
+function saveHist(user) {
+  const hist = historiales.get(user) || [];
+  // Solo guardar mensajes de texto (no imágenes base64 que pesan mucho)
+  MEMORIA.historiales[user] = hist
+    .filter(m => typeof m.content === 'string')
+    .slice(-20);
+  guardarMemoria(MEMORIA);
 }
 
 // ── AGENTE PRINCIPAL ─────────────────────────────────────────────────────────
@@ -368,7 +463,26 @@ app.post('/webhook', async (req, res) => {
   try {
     if (texto.toLowerCase() === '/reset') {
       historiales.delete(usuario);
+      delete MEMORIA.historiales[usuario];
+      guardarMemoria(MEMORIA);
       await enviar(usuario, '✅ Conversación reiniciada. ¡Soy HARKA, tu director creativo! ¿En qué arrancamos?');
+      return;
+    }
+
+    // Guardar nota permanente
+    if (texto.toLowerCase().startsWith('/nota ')) {
+      const nota = texto.substring(6).trim();
+      MEMORIA.notas.push({ fecha: new Date().toISOString(), texto: nota });
+      guardarMemoria(MEMORIA);
+      await enviar(usuario, `📌 Nota guardada: "${nota}"\nLa voy a tener en cuenta siempre.`);
+      return;
+    }
+
+    // Ver notas guardadas
+    if (texto.toLowerCase() === '/notas') {
+      const notas = MEMORIA.notas.slice(-10);
+      if (!notas.length) { await enviar(usuario, 'No tenés notas guardadas. Usá /nota [texto] para guardar una.'); return; }
+      await enviar(usuario, '📌 *Notas guardadas:*\n\n' + notas.map((n,i) => `${i+1}. ${n.texto}`).join('\n'));
       return;
     }
 
@@ -423,6 +537,9 @@ No soy solo un bot — tengo criterio propio y te voy a desafiar cuando tenga un
     for (const imgUrl of resultado.imagenes) {
       await enviar(usuario, '🎨 *Imagen generada con identidad Harkana:*', imgUrl);
     }
+
+    // Guardar historial después de cada respuesta
+    saveHist(usuario);
 
   } catch (err) {
     console.error('Error completo:', err.message, err.stack);
