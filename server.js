@@ -184,65 +184,47 @@ async function ejecutarTool(nombre, input) {
     }
 
     case 'generar_imagen': {
-      // fal.ai — Flux para generación de imágenes
       const estilos = {
-        marca:       'brand identity, corporate, verde oscuro #2D3F1E, tierra colorada #C2410C, crema #F2EBD9, elegant serif typography',
-        lifestyle:   'authentic lifestyle, warm natural light, argentine countryside, organic feel',
-        producto:    'product photography, professional, clean background, brand colors, kraft packaging',
-        minimalista: 'minimalist, white space, clean, elegant, one color accent',
-        editorial:   'editorial magazine style, bold typography, high contrast',
-        libre:       'creative, trendy, innovative, modern design 2026'
+        marca:       'brand identity, dark green #2D3F1E background, warm kraft paper texture, organic Argentine yerba mate',
+        lifestyle:   'authentic lifestyle, warm natural light, argentine countryside, organic feel, morning mate ritual',
+        producto:    'product photography, professional, clean neutral background, kraft paper packaging, artisanal',
+        minimalista: 'minimalist, clean, elegant, earthy tones, premium organic product',
+        editorial:   'editorial magazine style, high contrast, bold composition, organic food brand',
+        libre:       'creative, trendy, innovative, modern 2026 social media aesthetic'
       };
 
-      const formatoSize = {
-        cuadrado:  { width: 1080, height: 1080 },
-        vertical:  { width: 1080, height: 1920 },
-        horizontal:{ width: 1920, height: 1080 }
+      const imageSizes = {
+        cuadrado:   'square_hd',
+        vertical:   'portrait_4_3',
+        horizontal: 'landscape_4_3'
       };
 
-      const size = formatoSize[input.formato || 'cuadrado'];
-      const estiloDesc = estilos[input.estilo || 'marca'];
-
-      const promptCompleto = `${input.prompt}. Style: ${estiloDesc}. High quality, professional, for social media Instagram. Argentine organic yerba mate brand Harkana. No text overlays. Photorealistic.`;
+      const estiloDesc   = estilos[input.estilo || 'producto'];
+      const imageSize    = imageSizes[input.formato || 'cuadrado'];
+      const promptCompleto = `${input.prompt}. Style: ${estiloDesc}. High quality, professional photography, for Instagram. Photorealistic, no text.`;
 
       try {
-        // fal.ai Flux Pro
-        const res = await axios.post(
-          'https://queue.fal.run/fal-ai/flux-pro/v1.1',
+        // fal.ai Flux Schnell — rápido y directo (sin polling)
+        const falRes = await axios.post(
+          'https://fal.run/fal-ai/flux/schnell',
           {
             prompt: promptCompleto,
-            image_size: { width: size.width, height: size.height },
-            num_inference_steps: 28,
-            guidance_scale: 3.5,
+            image_size: imageSize,
+            num_inference_steps: 4,
             num_images: 1,
-            safety_tolerance: '2'
+            enable_safety_checker: false
           },
           {
             headers: {
               Authorization: `Key ${process.env.FAL_KEY}`,
               'Content-Type': 'application/json'
             },
-            timeout: 60000
+            timeout: 45000
           }
         );
 
-        // Esperar resultado (polling)
-        const requestId = res.data.request_id;
-        let resultado = null;
-        for (let i = 0; i < 30; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          const check = await axios.get(
-            `https://queue.fal.run/fal-ai/flux-pro/v1.1/requests/${requestId}`,
-            { headers: { Authorization: `Key ${process.env.FAL_KEY}` } }
-          );
-          if (check.data.status === 'COMPLETED') {
-            resultado = check.data;
-            break;
-          }
-        }
-
-        if (resultado?.images?.[0]?.url) {
-          return JSON.stringify({ imageUrl: resultado.images[0].url, prompt: promptCompleto });
+        if (falRes.data?.images?.[0]?.url) {
+          return JSON.stringify({ imageUrl: falRes.data.images[0].url, prompt: promptCompleto });
         }
         return JSON.stringify({ error: 'No se pudo generar la imagen', prompt: promptCompleto });
       } catch (e) {
