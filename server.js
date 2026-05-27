@@ -375,7 +375,7 @@ async function descargarImagen(url) {
 
 // ── WEBHOOK ───────────────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
-  res.sendStatus(200);
+  res.status(200).end();
 
   const { Body, From, NumMedia, MediaUrl0 } = req.body;
   const usuario = From;
