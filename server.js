@@ -425,8 +425,13 @@ No soy solo un bot — tengo criterio propio y te voy a desafiar cuando tenga un
     }
 
   } catch (err) {
-    console.error('Error:', err);
-    await enviar(usuario, '❌ Algo salió mal. Intentá de nuevo. Si persiste, escribí /reset.');
+    console.error('Error completo:', err.message, err.stack);
+    const msg = err.message?.includes('Authentication')
+      ? '❌ Error de autenticación con Twilio. Verificá las credenciales.'
+      : err.message?.includes('fal') || err.message?.includes('imagen')
+      ? '❌ Error generando imagen. Intentá solo con texto primero.'
+      : '❌ Error: ' + (err.message || 'desconocido') + '\nIntentá de nuevo o escribí /reset.';
+    await enviar(usuario, msg);
   }
 });
 
