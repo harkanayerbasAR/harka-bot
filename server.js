@@ -254,15 +254,30 @@ const TOOLS = [
   }
 ];
 
-// ── SUBIR FOTO A IMGBB (hosting público gratuito) ─────────────────────────────
-async function subirFotoPublica(base64) {
+// ── SUBIR FOTO A CREATOMATE ASSETS (Node 18 native FormData) ─────────────────
+async function subirFotoPublica(base64, mimeType) {
   try {
-    // Intentar ImgBB (no necesita key para imágenes pequeñas)
+    // 1. Intentar subir a Creatomate Assets
+    const buf  = Buffer.from(base64, 'base64');
+    const blob = new Blob([buf], { type: mimeType || 'image/jpeg' });
+    const form = new FormData();
+    form.append('file', blob, 'foto.jpg');
+
+    const res = await fetch('https://api.creatomate.com/v1/assets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` },
+      body: form
+    });
+    const data = await res.json();
+    if (data?.url) { console.log('✅ Foto subida a Creatomate:', data.url); return data.url; }
+
+    // 2. Fallback: ImgBB
     const params = new URLSearchParams();
-    params.append('key', process.env.IMGBB_KEY || '');
+    params.append('key', process.env.IMGBB_KEY || 'public');
     params.append('image', base64);
-    const res = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 20000 });
-    if (res.data?.data?.url) return res.data.data.url;
+    const r2 = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 20000 });
+    if (r2.data?.data?.url) return r2.data.data.url;
+
     return null;
   } catch(e) {
     console.error('Error subiendo foto:', e.message);
@@ -284,12 +299,7 @@ async function ejecutarTool(nombre, input, imagenData) {
       // Obtener URL pública de la foto
       let fotoUrl = null;
       if (imagenData) {
-        // Intentar subir a ImgBB para obtener URL pública
-        fotoUrl = await subirFotoPublica(imagenData.base64);
-        // Fallback: usar data URL base64 directamente
-        if (!fotoUrl) {
-          fotoUrl = `data:${imagenData.mimeType};base64,${imagenData.base64}`;
-        }
+        fotoUrl = await subirFotoPublica(imagenData.base64, imagenData.mimeType);
       }
 
       if (!fotoUrl) {
