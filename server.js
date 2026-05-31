@@ -119,7 +119,7 @@ Respondé siempre en español rioplatense. Sos directo, creativo y proactivo. M�
 
 REGLAS CRÍTICAS SOBRE IMÁGENES:
 
-1. FOTOS QUE TE MANDA EL USUARIO: NUNCA las modifiques, edites, ni generes una versión alternativa. Cuando el usuario manda una foto, SOLO la analizás y das sugerencias de copy, estrategia, hashtags y formato. Las fotos del usuario son su identidad de marca — son intocables.
+1. FOTOS QUE TE MANDA EL USUARIO: Cuando el usuario manda una foto, SIEMPRE llamás a la herramienta "editar_foto" para agregarle branding de Harkana y devolvérsela lista para publicar. Generás el copy vos mismo basándote en la foto. NUNCA alteres el contenido visual de la foto — solo agregás texto encima. El packaging y las fotos originales son intocables en su contenido.
 
 2. GENERACIÓN CON FAL.AI: Solo generás imágenes nuevas desde cero cuando el usuario escribe explícitamente "/imagen [descripción]". Nunca por iniciativa propia.
 
@@ -203,13 +203,26 @@ const TOOLS = [
     }
   },
   {
-    name: 'generar_imagen',
-    description: 'Genera una imagen con IA usando los colores y estilo de Harkana. Usá cuando el usuario pida un diseño, imagen o contenido visual.',
+    name: 'editar_foto',
+    description: 'Toma la foto REAL del usuario y le agrega branding de Harkana: texto, colores de marca, logo. Usar SIEMPRE cuando el usuario manda una foto y pide editarla o crear contenido con ella.',
     input_schema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'Descripción detallada de la imagen a generar' },
-        estilo: { type: 'string', enum: ['marca', 'lifestyle', 'producto', 'minimalista', 'editorial', 'libre'], description: 'Estilo visual' },
+        titulo:    { type: 'string', description: 'Texto principal a superponer sobre la foto (copy corto, máximo 2 líneas)' },
+        subtitulo: { type: 'string', description: 'Texto secundario pequeño (ej: Sin TACC · Orgánica)' },
+        formato:   { type: 'string', enum: ['feed', 'story'], description: 'feed = 1080x1080, story = 1080x1920' }
+      },
+      required: ['titulo', 'formato']
+    }
+  },
+  {
+    name: 'generar_imagen',
+    description: 'Genera una imagen nueva con IA desde cero. SOLO usar cuando el usuario pide explícitamente /imagen o una imagen que no existe en sus fotos.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt:  { type: 'string', description: 'Descripción detallada de la imagen a generar' },
+        estilo:  { type: 'string', enum: ['marca', 'lifestyle', 'producto', 'minimalista', 'editorial', 'libre'], description: 'Estilo visual' },
         formato: { type: 'string', enum: ['cuadrado', 'vertical', 'horizontal'], description: 'Formato de la imagen' }
       },
       required: ['prompt', 'estilo']
@@ -239,11 +252,134 @@ const TOOLS = [
   }
 ];
 
+// ── SUBIR FOTO A CREATOMATE ───────────────────────────────────────────────────
+async function subirFotoCreatomate(base64, mimeType) {
+  try {
+    const buf = Buffer.from(base64, 'base64');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('file', buf, { filename: 'foto.jpg', contentType: mimeType });
+    const res = await axios.post('https://api.creatomate.com/v1/assets', form, {
+      headers: {
+        ...form.getHeaders(),
+        Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`
+      },
+      timeout: 30000
+    });
+    return res.data?.url || null;
+  } catch(e) {
+    console.error('Error subiendo a Creatomate:', e.message);
+    return null;
+  }
+}
+
 // ── EJECUTAR HERRAMIENTAS ─────────────────────────────────────────────────────
-async function ejecutarTool(nombre, input) {
+async function ejecutarTool(nombre, input, imagenData) {
   console.log(`🔧 Tool: ${nombre}`, input);
 
   switch (nombre) {
+
+    case 'editar_foto': {
+      const { titulo, subtitulo, formato } = input;
+      const isStory = formato === 'story';
+      const W = 1080, H = isStory ? 1920 : 1080;
+
+      // Subir la foto del usuario a Creatomate
+      let fotoUrl = null;
+      if (imagenData) {
+        fotoUrl = await subirFotoCreatomate(imagenData.base64, imagenData.mimeType);
+      }
+
+      if (!fotoUrl) {
+        return JSON.stringify({ error: 'No hay foto para editar. El usuario debe mandar una foto primero.' });
+      }
+
+      try {
+        // Overlay bottom height
+        const overlayH = isStory ? '35%' : '40%';
+        const titleSize = isStory ? '72px' : '58px';
+        const subSize   = isStory ? '30px' : '24px';
+        const handleSize= isStory ? '26px' : '20px';
+
+        const elements = [
+          // Foto de fondo
+          { type: 'image', source: fotoUrl, fill_mode: 'cover', width: '100%', height: '100%' },
+          // Gradiente verde oscuro en la parte inferior
+          {
+            type: 'rectangle',
+            fill_color: 'rgba(14,35,16,0.78)',
+            width: '100%', height: overlayH,
+            x_anchor: 'center', x: '50%',
+            y_anchor: 'bottom', y: '0%'
+          },
+          // Línea dorada decorativa
+          {
+            type: 'rectangle',
+            fill_color: 'rgba(212,162,76,0.6)',
+            width: '60%', height: '1px',
+            x_anchor: 'center', x: '50%',
+            y_anchor: 'bottom', y: isStory ? '37%' : '42%'
+          },
+          // Título principal
+          {
+            type: 'text', text: titulo,
+            font_family: 'DM Serif Display', font_style: 'italic',
+            font_size: titleSize, color: '#F2EBD9',
+            text_align: 'center', width: '85%',
+            x_anchor: 'center', x: '50%',
+            y_anchor: 'bottom', y: isStory ? '27%' : '30%'
+          },
+          // Subtítulo
+          subtitulo ? {
+            type: 'text', text: subtitulo.toUpperCase(),
+            font_family: 'DM Sans', font_size: subSize,
+            color: '#D4A24C', letter_spacing: '0.15em',
+            text_align: 'center', width: '80%',
+            x_anchor: 'center', x: '50%',
+            y_anchor: 'bottom', y: isStory ? '17%' : '18%'
+          } : null,
+          // Handle @harkanaar
+          {
+            type: 'text', text: '@harkanaar',
+            font_family: 'DM Sans', font_size: handleSize,
+            color: 'rgba(242,235,217,0.45)', letter_spacing: '0.2em',
+            text_align: 'center',
+            x_anchor: 'center', x: '50%',
+            y_anchor: 'bottom', y: isStory ? '8%' : '7%'
+          }
+        ].filter(Boolean);
+
+        const res = await axios.post('https://api.creatomate.com/v1/renders', {
+          output_format: 'jpg', width: W, height: H,
+          frame_rate: 1, duration: 1,
+          elements
+        }, {
+          headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`, 'Content-Type': 'application/json' },
+          timeout: 90000
+        });
+
+        // Esperar resultado (Creatomate es asíncrono)
+        const renderId = res.data?.[0]?.id;
+        if (!renderId) return JSON.stringify({ error: 'No se recibió ID de render' });
+
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          const check = await axios.get(`https://api.creatomate.com/v1/renders/${renderId}`, {
+            headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` }
+          });
+          if (check.data?.status === 'succeeded') {
+            return JSON.stringify({ imageUrl: check.data.url, exito: true });
+          }
+          if (check.data?.status === 'failed') {
+            return JSON.stringify({ error: 'Render falló: ' + check.data.error_message });
+          }
+        }
+        return JSON.stringify({ error: 'Timeout esperando el render' });
+      } catch(e) {
+        console.error('Creatomate error:', e.message);
+        return JSON.stringify({ error: 'Error Creatomate: ' + e.message });
+      }
+    }
 
     case 'buscar_web':
     case 'analizar_tendencias_instagram':
@@ -389,7 +525,7 @@ async function agente(usuario, texto, imagenData) {
       for (const bloque of res.content) {
         if (bloque.type !== 'tool_use') continue;
 
-        const resultado = await ejecutarTool(bloque.name, bloque.input);
+        const resultado = await ejecutarTool(bloque.name, bloque.input, imagenData);
 
         // Si generó imagen, guardar la URL
         if (bloque.name === 'generar_imagen') {
