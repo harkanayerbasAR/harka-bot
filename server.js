@@ -254,33 +254,34 @@ const TOOLS = [
   }
 ];
 
-// ── SUBIR FOTO A CREATOMATE ASSETS (Node 18 native FormData) ─────────────────
+// ── SUBIR FOTO A IMGBB ────────────────────────────────────────────────────────
 async function subirFotoPublica(base64, mimeType) {
   try {
-    // 1. Intentar subir a Creatomate Assets
-    const buf  = Buffer.from(base64, 'base64');
-    const blob = new Blob([buf], { type: mimeType || 'image/jpeg' });
-    const form = new FormData();
-    form.append('file', blob, 'foto.jpg');
-
-    const res = await fetch('https://api.creatomate.com/v1/assets', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` },
-      body: form
-    });
-    const data = await res.json();
-    if (data?.url) { console.log('✅ Foto subida a Creatomate:', data.url); return data.url; }
-
-    // 2. Fallback: ImgBB
+    const key = process.env.IMGBB_KEY;
+    if (!key) throw new Error('Sin IMGBB_KEY');
     const params = new URLSearchParams();
-    params.append('key', process.env.IMGBB_KEY || 'public');
+    params.append('key', key);
     params.append('image', base64);
-    const r2 = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 20000 });
-    if (r2.data?.data?.url) return r2.data.data.url;
-
-    return null;
+    const res = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 25000 });
+    const url = res.data?.data?.url;
+    if (url) { console.log('✅ Foto en ImgBB:', url); return url; }
+    throw new Error('ImgBB no devolvió URL');
   } catch(e) {
-    console.error('Error subiendo foto:', e.message);
+    console.error('Error ImgBB:', e.message);
+    // Último recurso: subir a Creatomate assets con fetch nativo
+    try {
+      const buf  = Buffer.from(base64, 'base64');
+      const blob = new Blob([buf], { type: mimeType || 'image/jpeg' });
+      const form = new FormData();
+      form.append('file', blob, 'foto.jpg');
+      const r = await fetch('https://api.creatomate.com/v1/assets', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` },
+        body: form
+      });
+      const d = await r.json();
+      if (d?.url) { console.log('✅ Foto en Creatomate assets:', d.url); return d.url; }
+    } catch(e2) { console.error('Error Creatomate assets:', e2.message); }
     return null;
   }
 }
@@ -307,63 +308,70 @@ async function ejecutarTool(nombre, input, imagenData) {
       }
 
       try {
-        // Overlay bottom height
-        const overlayH = isStory ? '35%' : '40%';
-        const titleSize = isStory ? '72px' : '58px';
-        const subSize   = isStory ? '30px' : '24px';
-        const handleSize= isStory ? '26px' : '20px';
+        // Posiciones de texto según formato
+        const tyTitle  = isStory ? '76%' : '72%';
+        const tySub    = isStory ? '84%' : '83%';
+        const tyHandle = isStory ? '91%' : '91%';
+        const titleFs  = isStory ? '6.5vmin' : '5.5vmin';
+        const subFs    = isStory ? '2.5vmin' : '2.2vmin';
 
         const elements = [
-          // Foto de fondo
-          { type: 'image', source: fotoUrl, fill_mode: 'cover', width: '100%', height: '100%' },
+          // Foto de fondo (formato correcto Creatomate)
+          {
+            type: 'image', source: fotoUrl,
+            fit: 'cover',
+            width: '100%', height: '100%',
+            x: '50%', y: '50%',
+            x_anchor: '50%', y_anchor: '50%'
+          },
           // Gradiente verde oscuro en la parte inferior
           {
             type: 'rectangle',
-            fill_color: 'rgba(14,35,16,0.78)',
-            width: '100%', height: overlayH,
-            x_anchor: 'center', x: '50%',
-            y_anchor: 'bottom', y: '0%'
+            fill_color: 'rgba(14,35,16,0.82)',
+            width: '100%', height: isStory ? '38%' : '42%',
+            x: '50%', y: '100%',
+            x_anchor: '50%', y_anchor: '100%'
           },
           // Línea dorada decorativa
           {
             type: 'rectangle',
-            fill_color: 'rgba(212,162,76,0.6)',
-            width: '60%', height: '1px',
-            x_anchor: 'center', x: '50%',
-            y_anchor: 'bottom', y: isStory ? '37%' : '42%'
+            fill_color: '#D4A24C',
+            fill_color_opacity: 0.6,
+            width: '55%', height: '1px',
+            x: '50%', y: isStory ? '70%' : '68%',
+            x_anchor: '50%', y_anchor: '50%'
           },
           // Título principal
           {
             type: 'text', text: titulo,
-            font_family: 'DM Serif Display', font_style: 'italic',
-            font_size: titleSize, color: '#F2EBD9',
+            font_family: 'Georgia', font_style: 'italic',
+            font_size: titleFs, color: '#F2EBD9',
             text_align: 'center', width: '85%',
-            x_anchor: 'center', x: '50%',
-            y_anchor: 'bottom', y: isStory ? '27%' : '30%'
+            x: '50%', y: tyTitle,
+            x_anchor: '50%', y_anchor: '50%'
           },
           // Subtítulo
           subtitulo ? {
             type: 'text', text: subtitulo.toUpperCase(),
-            font_family: 'DM Sans', font_size: subSize,
-            color: '#D4A24C', letter_spacing: '0.15em',
+            font_family: 'Open Sans', font_size: subFs,
+            color: '#D4A24C',
             text_align: 'center', width: '80%',
-            x_anchor: 'center', x: '50%',
-            y_anchor: 'bottom', y: isStory ? '17%' : '18%'
+            x: '50%', y: tySub,
+            x_anchor: '50%', y_anchor: '50%'
           } : null,
           // Handle @harkanaar
           {
             type: 'text', text: '@harkanaar',
-            font_family: 'DM Sans', font_size: handleSize,
-            color: 'rgba(242,235,217,0.45)', letter_spacing: '0.2em',
+            font_family: 'Open Sans', font_size: isStory ? '2vmin' : '1.8vmin',
+            color: 'rgba(242,235,217,0.5)',
             text_align: 'center',
-            x_anchor: 'center', x: '50%',
-            y_anchor: 'bottom', y: isStory ? '8%' : '7%'
+            x: '50%', y: tyHandle,
+            x_anchor: '50%', y_anchor: '50%'
           }
         ].filter(Boolean);
 
         const res = await axios.post('https://api.creatomate.com/v1/renders', {
           output_format: 'jpg', width: W, height: H,
-          frame_rate: 1, duration: 1,
           elements
         }, {
           headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`, 'Content-Type': 'application/json' },
