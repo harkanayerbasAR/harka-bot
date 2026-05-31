@@ -117,6 +117,8 @@ COMANDOS ESPECIALES
 
 Respondé siempre en español rioplatense. Sos directo, creativo y proactivo. Máximo 400 palabras, pero si tenés mucho para decir, dividilo en mensajes.
 
+REGLA ABSOLUTA: JAMÁS menciones Canva, CapCut, Midjourney, Adobe ni ninguna herramienta externa. Si algo falla técnicamente, decís solamente: "Hay un error técnico, intentá de nuevo en un momento." Nada más. Somos autosuficientes.
+
 REGLAS CRÍTICAS SOBRE IMÁGENES:
 
 1. FOTOS QUE TE MANDA EL USUARIO: Cuando el usuario manda una foto, SIEMPRE llamás a la herramienta "editar_foto" para agregarle branding de Harkana y devolvérsela lista para publicar. Generás el copy vos mismo basándote en la foto. NUNCA alteres el contenido visual de la foto — solo agregás texto encima. El packaging y las fotos originales son intocables en su contenido.
@@ -252,23 +254,18 @@ const TOOLS = [
   }
 ];
 
-// ── SUBIR FOTO A CREATOMATE ───────────────────────────────────────────────────
-async function subirFotoCreatomate(base64, mimeType) {
+// ── SUBIR FOTO A IMGBB (hosting público gratuito) ─────────────────────────────
+async function subirFotoPublica(base64) {
   try {
-    const buf = Buffer.from(base64, 'base64');
-    const FormData = require('form-data');
-    const form = new FormData();
-    form.append('file', buf, { filename: 'foto.jpg', contentType: mimeType });
-    const res = await axios.post('https://api.creatomate.com/v1/assets', form, {
-      headers: {
-        ...form.getHeaders(),
-        Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`
-      },
-      timeout: 30000
-    });
-    return res.data?.url || null;
+    // Intentar ImgBB (no necesita key para imágenes pequeñas)
+    const params = new URLSearchParams();
+    params.append('key', process.env.IMGBB_KEY || '');
+    params.append('image', base64);
+    const res = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 20000 });
+    if (res.data?.data?.url) return res.data.data.url;
+    return null;
   } catch(e) {
-    console.error('Error subiendo a Creatomate:', e.message);
+    console.error('Error subiendo foto:', e.message);
     return null;
   }
 }
@@ -284,14 +281,19 @@ async function ejecutarTool(nombre, input, imagenData) {
       const isStory = formato === 'story';
       const W = 1080, H = isStory ? 1920 : 1080;
 
-      // Subir la foto del usuario a Creatomate
+      // Obtener URL pública de la foto
       let fotoUrl = null;
       if (imagenData) {
-        fotoUrl = await subirFotoCreatomate(imagenData.base64, imagenData.mimeType);
+        // Intentar subir a ImgBB para obtener URL pública
+        fotoUrl = await subirFotoPublica(imagenData.base64);
+        // Fallback: usar data URL base64 directamente
+        if (!fotoUrl) {
+          fotoUrl = `data:${imagenData.mimeType};base64,${imagenData.base64}`;
+        }
       }
 
       if (!fotoUrl) {
-        return JSON.stringify({ error: 'No hay foto para editar. El usuario debe mandar una foto primero.' });
+        return JSON.stringify({ error: 'No hay foto para editar. Mandame una foto primero.' });
       }
 
       try {
