@@ -254,34 +254,25 @@ const TOOLS = [
   }
 ];
 
-// ── SUBIR FOTO A IMGBB ────────────────────────────────────────────────────────
+// ── SUBIR FOTO A CREATOMATE (binario directo) ─────────────────────────────────
 async function subirFotoPublica(base64, mimeType) {
   try {
-    const key = process.env.IMGBB_KEY;
-    if (!key) throw new Error('Sin IMGBB_KEY');
-    const params = new URLSearchParams();
-    params.append('key', key);
-    params.append('image', base64);
-    const res = await axios.post('https://api.imgbb.com/1/upload', params, { timeout: 25000 });
-    const url = res.data?.data?.url;
-    if (url) { console.log('✅ Foto en ImgBB:', url); return url; }
-    throw new Error('ImgBB no devolvió URL');
+    const buf = Buffer.from(base64, 'base64');
+    const ct  = mimeType || 'image/jpeg';
+    const res = await axios.post('https://api.creatomate.com/v1/assets', buf, {
+      headers: {
+        Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`,
+        'Content-Type': ct
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      timeout: 30000
+    });
+    const url = res.data?.url;
+    if (url) { console.log('✅ Foto subida a Creatomate:', url); return url; }
+    throw new Error('Sin URL en respuesta: ' + JSON.stringify(res.data));
   } catch(e) {
-    console.error('Error ImgBB:', e.message);
-    // Último recurso: subir a Creatomate assets con fetch nativo
-    try {
-      const buf  = Buffer.from(base64, 'base64');
-      const blob = new Blob([buf], { type: mimeType || 'image/jpeg' });
-      const form = new FormData();
-      form.append('file', blob, 'foto.jpg');
-      const r = await fetch('https://api.creatomate.com/v1/assets', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` },
-        body: form
-      });
-      const d = await r.json();
-      if (d?.url) { console.log('✅ Foto en Creatomate assets:', d.url); return d.url; }
-    } catch(e2) { console.error('Error Creatomate assets:', e2.message); }
+    console.error('Error upload foto:', e.response?.data || e.message);
     return null;
   }
 }
@@ -308,72 +299,70 @@ async function ejecutarTool(nombre, input, imagenData) {
       }
 
       try {
-        // Posiciones de texto según formato
-        const tyTitle  = isStory ? '76%' : '72%';
-        const tySub    = isStory ? '84%' : '83%';
-        const tyHandle = isStory ? '91%' : '91%';
-        const titleFs  = isStory ? '6.5vmin' : '5.5vmin';
-        const subFs    = isStory ? '2.5vmin' : '2.2vmin';
+        const payload = {
+          output_format: 'jpg',
+          width: W,
+          height: H,
+          elements: [
+            {
+              id: 'fondo',
+              type: 'image',
+              source: fotoUrl,
+              fit: 'cover'
+            },
+            {
+              id: 'overlay',
+              type: 'rectangle',
+              fill_color: '#0E2310',
+              opacity: 0.78,
+              width: '100%',
+              height: isStory ? '38%' : '42%',
+              x: '0%',
+              y: isStory ? '62%' : '58%'
+            },
+            {
+              id: 'titulo',
+              type: 'text',
+              text: titulo,
+              font_family: 'Georgia',
+              font_style: 'italic',
+              font_size: isStory ? 70 : 56,
+              color: '#F2EBD9',
+              text_align: 'center',
+              width: '85%',
+              x: '7.5%',
+              y: isStory ? '68%' : '64%'
+            },
+            subtitulo ? {
+              id: 'subtitulo',
+              type: 'text',
+              text: subtitulo,
+              font_family: 'Arial',
+              font_size: isStory ? 28 : 22,
+              color: '#D4A24C',
+              text_align: 'center',
+              width: '85%',
+              x: '7.5%',
+              y: isStory ? '82%' : '78%'
+            } : null,
+            {
+              id: 'handle',
+              type: 'text',
+              text: '@harkanaar',
+              font_family: 'Arial',
+              font_size: isStory ? 24 : 18,
+              color: '#F2EBD9',
+              text_align: 'center',
+              width: '85%',
+              x: '7.5%',
+              y: isStory ? '90%' : '88%'
+            }
+          ].filter(Boolean)
+        };
 
-        const elements = [
-          // Foto de fondo (formato correcto Creatomate)
-          {
-            type: 'image', source: fotoUrl,
-            fit: 'cover',
-            width: '100%', height: '100%',
-            x: '50%', y: '50%',
-            x_anchor: '50%', y_anchor: '50%'
-          },
-          // Gradiente verde oscuro en la parte inferior
-          {
-            type: 'rectangle',
-            fill_color: 'rgba(14,35,16,0.82)',
-            width: '100%', height: isStory ? '38%' : '42%',
-            x: '50%', y: '100%',
-            x_anchor: '50%', y_anchor: '100%'
-          },
-          // Línea dorada decorativa
-          {
-            type: 'rectangle',
-            fill_color: '#D4A24C',
-            fill_color_opacity: 0.6,
-            width: '55%', height: '1px',
-            x: '50%', y: isStory ? '70%' : '68%',
-            x_anchor: '50%', y_anchor: '50%'
-          },
-          // Título principal
-          {
-            type: 'text', text: titulo,
-            font_family: 'Georgia', font_style: 'italic',
-            font_size: titleFs, color: '#F2EBD9',
-            text_align: 'center', width: '85%',
-            x: '50%', y: tyTitle,
-            x_anchor: '50%', y_anchor: '50%'
-          },
-          // Subtítulo
-          subtitulo ? {
-            type: 'text', text: subtitulo.toUpperCase(),
-            font_family: 'Open Sans', font_size: subFs,
-            color: '#D4A24C',
-            text_align: 'center', width: '80%',
-            x: '50%', y: tySub,
-            x_anchor: '50%', y_anchor: '50%'
-          } : null,
-          // Handle @harkanaar
-          {
-            type: 'text', text: '@harkanaar',
-            font_family: 'Open Sans', font_size: isStory ? '2vmin' : '1.8vmin',
-            color: 'rgba(242,235,217,0.5)',
-            text_align: 'center',
-            x: '50%', y: tyHandle,
-            x_anchor: '50%', y_anchor: '50%'
-          }
-        ].filter(Boolean);
+        console.log('📤 Creatomate payload:', JSON.stringify(payload).substring(0, 300));
 
-        const res = await axios.post('https://api.creatomate.com/v1/renders', {
-          output_format: 'jpg', width: W, height: H,
-          elements
-        }, {
+        const res = await axios.post('https://api.creatomate.com/v1/renders', payload, {
           headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`, 'Content-Type': 'application/json' },
           timeout: 90000
         });
