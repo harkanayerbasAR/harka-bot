@@ -254,27 +254,48 @@ const TOOLS = [
   }
 ];
 
-// ── SUBIR FOTO A CREATOMATE (binario directo) ─────────────────────────────────
+// ── SUBIR FOTO A URL PÚBLICA ──────────────────────────────────────────────────
 async function subirFotoPublica(base64, mimeType) {
+  const ct = mimeType || 'image/jpeg';
+
+  // Intento 1: ImgBB (form-urlencoded con base64)
+  if (process.env.IMGBB_KEY) {
+    try {
+      const params = new URLSearchParams();
+      params.append('key', process.env.IMGBB_KEY);
+      params.append('image', base64);
+      const res = await axios.post('https://api.imgbb.com/1/upload', params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 30000,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      });
+      const url = res.data?.data?.url;
+      if (url) { console.log('✅ Foto subida a ImgBB:', url); return url; }
+    } catch(e) {
+      console.error('ImgBB error:', e.response?.data || e.message);
+    }
+  }
+
+  // Intento 2: Creatomate assets con multipart/form-data
   try {
     const buf = Buffer.from(base64, 'base64');
-    const ct  = mimeType || 'image/jpeg';
-    const res = await axios.post('https://api.creatomate.com/v1/assets', buf, {
-      headers: {
-        Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`,
-        'Content-Type': ct
-      },
+    const ext = ct.split('/')[1] || 'jpg';
+    const fd  = new FormData();
+    fd.append('file', new Blob([buf], { type: ct }), `foto.${ext}`);
+    const res = await axios.post('https://api.creatomate.com/v1/assets', fd, {
+      headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` },
+      timeout: 30000,
       maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 30000
+      maxBodyLength: Infinity
     });
     const url = res.data?.url;
-    if (url) { console.log('✅ Foto subida a Creatomate:', url); return url; }
-    throw new Error('Sin URL en respuesta: ' + JSON.stringify(res.data));
+    if (url) { console.log('✅ Foto subida a Creatomate assets:', url); return url; }
   } catch(e) {
-    console.error('Error upload foto:', e.response?.data || e.message);
-    return null;
+    console.error('Creatomate assets error:', e.response?.data || e.message);
   }
+
+  return null;
 }
 
 // ── EJECUTAR HERRAMIENTAS ─────────────────────────────────────────────────────
@@ -299,65 +320,80 @@ async function ejecutarTool(nombre, input, imagenData) {
       }
 
       try {
+        // Coordenadas: Creatomate posiciona x/y en el CENTRO del elemento (anchor=50%)
+        const overlayH  = isStory ? 38 : 42;
+        const overlayTop = isStory ? 62 : 58;
+        const overlayCY  = overlayTop + overlayH / 2;
+
+        const textElements = [
+          {
+            type: 'text',
+            track: 3,
+            text: titulo,
+            font_family: 'Georgia',
+            font_style: 'Italic',
+            font_size: isStory ? 70 : 56,
+            color: '#F2EBD9',
+            text_align: 'center',
+            width: '85%',
+            x: '50%',
+            y: `${(overlayTop + overlayH * 0.28).toFixed(1)}%`
+          },
+          subtitulo ? {
+            type: 'text',
+            track: 4,
+            text: subtitulo,
+            font_family: 'Arial',
+            font_size: isStory ? 28 : 22,
+            color: '#D4A24C',
+            text_align: 'center',
+            width: '85%',
+            x: '50%',
+            y: `${(overlayTop + overlayH * 0.65).toFixed(1)}%`
+          } : null,
+          {
+            type: 'text',
+            track: subtitulo ? 5 : 4,
+            text: '@harkanaar',
+            font_family: 'Arial',
+            font_size: isStory ? 24 : 18,
+            color: '#F2EBD9',
+            text_align: 'center',
+            width: '85%',
+            x: '50%',
+            y: `${(overlayTop + overlayH * 0.88).toFixed(1)}%`
+          }
+        ].filter(Boolean);
+
         const payload = {
-          output_format: 'jpg',
-          width: W,
-          height: H,
-          elements: [
-            {
-              id: 'fondo',
-              type: 'image',
-              source: fotoUrl,
-              fit: 'cover'
-            },
-            {
-              id: 'overlay',
-              type: 'rectangle',
-              fill_color: '#0E2310',
-              opacity: 0.78,
-              width: '100%',
-              height: isStory ? '38%' : '42%',
-              x: '0%',
-              y: isStory ? '62%' : '58%'
-            },
-            {
-              id: 'titulo',
-              type: 'text',
-              text: titulo,
-              font_family: 'Georgia',
-              font_style: 'italic',
-              font_size: isStory ? 70 : 56,
-              color: '#F2EBD9',
-              text_align: 'center',
-              width: '85%',
-              x: '7.5%',
-              y: isStory ? '68%' : '64%'
-            },
-            subtitulo ? {
-              id: 'subtitulo',
-              type: 'text',
-              text: subtitulo,
-              font_family: 'Arial',
-              font_size: isStory ? 28 : 22,
-              color: '#D4A24C',
-              text_align: 'center',
-              width: '85%',
-              x: '7.5%',
-              y: isStory ? '82%' : '78%'
-            } : null,
-            {
-              id: 'handle',
-              type: 'text',
-              text: '@harkanaar',
-              font_family: 'Arial',
-              font_size: isStory ? 24 : 18,
-              color: '#F2EBD9',
-              text_align: 'center',
-              width: '85%',
-              x: '7.5%',
-              y: isStory ? '90%' : '88%'
-            }
-          ].filter(Boolean)
+          source: {
+            output_format: 'jpg',
+            width: W,
+            height: H,
+            elements: [
+              {
+                type: 'image',
+                track: 1,
+                source: fotoUrl,
+                fit: 'cover',
+                width: '100%',
+                height: '100%',
+                x: '50%',
+                y: '50%'
+              },
+              {
+                type: 'rectangle',
+                track: 2,
+                fill_color: '#0E2310',
+                opacity: 0.78,
+                width: '100%',
+                height: `${overlayH}%`,
+                x: '50%',
+                y: `${overlayCY.toFixed(1)}%`
+              },
+              ...textElements
+            ]
+          }
         };
 
         console.log('📤 Creatomate payload:', JSON.stringify(payload).substring(0, 300));
@@ -536,8 +572,8 @@ async function agente(usuario, texto, imagenData) {
 
         const resultado = await ejecutarTool(bloque.name, bloque.input, imagenData);
 
-        // Si generó imagen, guardar la URL
-        if (bloque.name === 'generar_imagen') {
+        // Si generó o editó imagen, guardar la URL
+        if (bloque.name === 'generar_imagen' || bloque.name === 'editar_foto') {
           try {
             const parsed = JSON.parse(resultado);
             if (parsed.imageUrl) imagenesGeneradas.push(parsed.imageUrl);
