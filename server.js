@@ -6,6 +6,7 @@ const axios     = require('axios');
 const fetch     = require('node-fetch');
 const fs        = require('fs');
 const path      = require('path');
+const sharp     = require('sharp');
 
 // ── MEMORIA PERSISTENTE (archivo JSON local) ──────────────────────────────────
 const MEMORIA_FILE = path.join('/tmp', 'harka-memoria.json');
@@ -254,6 +255,57 @@ const TOOLS = [
   }
 ];
 
+// ── EDICIÓN LOCAL DE FOTOS CON SHARP + SVG ───────────────────────────────────
+function xmlEsc(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function editarFotoLocal(base64, mimeType, titulo, subtitulo, formato) {
+  const isStory = formato === 'story';
+  const W = 1080, H = isStory ? 1920 : 1080;
+
+  const imgBuf = Buffer.from(base64, 'base64');
+
+  // Redimensionar foto cubriendo todo el canvas
+  const resized = await sharp(imgBuf)
+    .resize(W, H, { fit: 'cover', position: 'centre' })
+    .toBuffer();
+
+  // Calcular overlay inferior
+  const overlayH = Math.round(H * (isStory ? 0.38 : 0.42));
+  const overlayY = H - overlayH;
+
+  // Tamaños de fuente
+  const titleSz  = isStory ? 70 : 56;
+  const subSz    = isStory ? 28 : 22;
+  const handleSz = isStory ? 24 : 18;
+
+  // Posiciones Y (baseline del texto, dentro del overlay)
+  const titleY  = overlayY + Math.round(overlayH * 0.35) + titleSz;
+  const subY    = overlayY + Math.round(overlayH * 0.60) + subSz;
+  const handleY = overlayY + Math.round(overlayH * 0.82) + handleSz;
+
+  const cx = Math.round(W / 2);
+
+  const svgLines = [
+    `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">`,
+    // Overlay oscuro
+    `<rect x="0" y="${overlayY}" width="${W}" height="${overlayH}" fill="#0E2310" fill-opacity="0.82"/>`,
+    // Título
+    `<text x="${cx}" y="${titleY}" font-family="Georgia,serif" font-size="${titleSz}" fill="#F2EBD9" text-anchor="middle" font-style="italic">${xmlEsc(titulo)}</text>`,
+    // Subtítulo (opcional)
+    subtitulo ? `<text x="${cx}" y="${subY}" font-family="Arial,sans-serif" font-size="${subSz}" fill="#D4A24C" text-anchor="middle">${xmlEsc(subtitulo)}</text>` : '',
+    // Handle
+    `<text x="${cx}" y="${handleY}" font-family="Arial,sans-serif" font-size="${handleSz}" fill="#F2EBD9" text-anchor="middle">@harkanaar</text>`,
+    `</svg>`
+  ].join('\n');
+
+  return sharp(resized)
+    .composite([{ input: Buffer.from(svgLines), top: 0, left: 0 }])
+    .jpeg({ quality: 87 })
+    .toBuffer();
+}
+
 // ── SUBIR FOTO A URL PÚBLICA ──────────────────────────────────────────────────
 async function subirFotoPublica(base64, mimeType) {
   const ct = mimeType || 'image/jpeg';
@@ -306,123 +358,26 @@ async function ejecutarTool(nombre, input, imagenData) {
 
     case 'editar_foto': {
       const { titulo, subtitulo, formato } = input;
-      const isStory = formato === 'story';
-      const W = 1080, H = isStory ? 1920 : 1080;
 
-      // Obtener URL pública de la foto
-      let fotoUrl = null;
-      if (imagenData) {
-        fotoUrl = await subirFotoPublica(imagenData.base64, imagenData.mimeType);
-      }
-
-      if (!fotoUrl) {
+      if (!imagenData) {
         return JSON.stringify({ error: 'No hay foto para editar. Mandame una foto primero.' });
       }
 
       try {
-        // Coordenadas: Creatomate posiciona x/y en el CENTRO del elemento (anchor=50%)
-        const overlayH  = isStory ? 38 : 42;
-        const overlayTop = isStory ? 62 : 58;
-        const overlayCY  = overlayTop + overlayH / 2;
+        console.log('🖼️ Editando foto localmente con sharp...');
+        const editedBuf    = await editarFotoLocal(imagenData.base64, imagenData.mimeType, titulo, subtitulo, formato);
+        const editedBase64 = editedBuf.toString('base64');
 
-        const textElements = [
-          {
-            type: 'text',
-            track: 3,
-            text: titulo,
-            font_family: 'Georgia',
-            font_style: 'Italic',
-            font_size: isStory ? 70 : 56,
-            color: '#F2EBD9',
-            text_align: 'center',
-            width: '85%',
-            x: '50%',
-            y: `${(overlayTop + overlayH * 0.28).toFixed(1)}%`
-          },
-          subtitulo ? {
-            type: 'text',
-            track: 4,
-            text: subtitulo,
-            font_family: 'Arial',
-            font_size: isStory ? 28 : 22,
-            color: '#D4A24C',
-            text_align: 'center',
-            width: '85%',
-            x: '50%',
-            y: `${(overlayTop + overlayH * 0.65).toFixed(1)}%`
-          } : null,
-          {
-            type: 'text',
-            track: subtitulo ? 5 : 4,
-            text: '@harkanaar',
-            font_family: 'Arial',
-            font_size: isStory ? 24 : 18,
-            color: '#F2EBD9',
-            text_align: 'center',
-            width: '85%',
-            x: '50%',
-            y: `${(overlayTop + overlayH * 0.88).toFixed(1)}%`
-          }
-        ].filter(Boolean);
+        console.log('📤 Subiendo foto editada a ImgBB...');
+        const fotoUrl = await subirFotoPublica(editedBase64, 'image/jpeg');
 
-        const payload = {
-          source: {
-            output_format: 'jpg',
-            width: W,
-            height: H,
-            elements: [
-              {
-                type: 'image',
-                track: 1,
-                source: fotoUrl,
-                fit: 'cover',
-                width: '100%',
-                height: '100%',
-                x: '50%',
-                y: '50%'
-              },
-              {
-                type: 'rectangle',
-                track: 2,
-                fill_color: '#0E2310',
-                opacity: 0.78,
-                width: '100%',
-                height: `${overlayH}%`,
-                x: '50%',
-                y: `${overlayCY.toFixed(1)}%`
-              },
-              ...textElements
-            ]
-          }
-        };
+        if (!fotoUrl) return JSON.stringify({ error: 'No se pudo subir la foto editada.' });
 
-        console.log('📤 Creatomate payload:', JSON.stringify(payload).substring(0, 300));
-
-        const res = await axios.post('https://api.creatomate.com/v1/renders', payload, {
-          headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}`, 'Content-Type': 'application/json' },
-          timeout: 90000
-        });
-
-        // Esperar resultado (Creatomate es asíncrono)
-        const renderId = res.data?.[0]?.id;
-        if (!renderId) return JSON.stringify({ error: 'No se recibió ID de render' });
-
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          const check = await axios.get(`https://api.creatomate.com/v1/renders/${renderId}`, {
-            headers: { Authorization: `Bearer ${process.env.CREATOMATE_API_KEY}` }
-          });
-          if (check.data?.status === 'succeeded') {
-            return JSON.stringify({ imageUrl: check.data.url, exito: true });
-          }
-          if (check.data?.status === 'failed') {
-            return JSON.stringify({ error: 'Render falló: ' + check.data.error_message });
-          }
-        }
-        return JSON.stringify({ error: 'Timeout esperando el render' });
+        console.log('✅ Foto editada lista:', fotoUrl);
+        return JSON.stringify({ imageUrl: fotoUrl, exito: true });
       } catch(e) {
-        console.error('Creatomate error:', e.message);
-        return JSON.stringify({ error: 'Error Creatomate: ' + e.message });
+        console.error('Error editando foto:', e.message);
+        return JSON.stringify({ error: 'Error al editar la foto: ' + e.message });
       }
     }
 
