@@ -33,6 +33,18 @@ const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+// URL pública del bot (se auto-detecta del primer request entrante)
+let _baseUrl = process.env.BASE_URL || '';
+
+// Servir imágenes editadas directamente desde /tmp
+app.get('/media/:file', (req, res) => {
+  const filePath = path.join('/tmp', path.basename(req.params.file));
+  if (!fs.existsSync(filePath)) return res.status(404).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  fs.createReadStream(filePath).pipe(res);
+});
+
 // ── IDENTIDAD COMPLETA DE HARKANA ────────────────────────────────────────────
 const DIRECTOR_SYSTEM = `Sos el DIRECTOR CREATIVO DIGITAL de HARKANA, una marca argentina de yerba mate orgánica de Alejandro Roca, Córdoba.
 
@@ -351,7 +363,7 @@ async function subirFotoPublica(base64, mimeType) {
 }
 
 // ── EJECUTAR HERRAMIENTAS ─────────────────────────────────────────────────────
-async function ejecutarTool(nombre, input, imagenData) {
+async function ejecutarTool(nombre, input, imagenData, baseUrl) {
   console.log(`🔧 Tool: ${nombre}`, input);
 
   switch (nombre) {
@@ -365,18 +377,18 @@ async function ejecutarTool(nombre, input, imagenData) {
 
       try {
         console.log('🖼️ Editando foto localmente con sharp...');
-        const editedBuf    = await editarFotoLocal(imagenData.base64, imagenData.mimeType, titulo, subtitulo, formato);
-        const editedBase64 = editedBuf.toString('base64');
+        const editedBuf = await editarFotoLocal(imagenData.base64, imagenData.mimeType, titulo, subtitulo, formato);
 
-        console.log('📤 Subiendo foto editada a ImgBB...');
-        const fotoUrl = await subirFotoPublica(editedBase64, 'image/jpeg');
+        // Guardar en /tmp y servir desde el propio servidor (sin servicios externos)
+        const filename = `harka-${Date.now()}-${Math.random().toString(36).substr(2,6)}.jpg`;
+        const filepath = path.join('/tmp', filename);
+        fs.writeFileSync(filepath, editedBuf);
 
-        if (!fotoUrl) return JSON.stringify({ error: 'No se pudo subir la foto editada.' });
-
-        console.log('✅ Foto editada lista:', fotoUrl);
-        return JSON.stringify({ imageUrl: fotoUrl, exito: true });
+        const imageUrl = `${baseUrl}/media/${filename}`;
+        console.log('✅ Foto editada lista:', imageUrl);
+        return JSON.stringify({ imageUrl, exito: true });
       } catch(e) {
-        console.error('Error editando foto:', e.message);
+        console.error('Error editando foto:', e.message, e.stack);
         return JSON.stringify({ error: 'Error al editar la foto: ' + e.message });
       }
     }
@@ -488,7 +500,7 @@ function saveHist(user) {
 }
 
 // ── AGENTE PRINCIPAL ─────────────────────────────────────────────────────────
-async function agente(usuario, texto, imagenData) {
+async function agente(usuario, texto, imagenData, baseUrl) {
   const hist = getHist(usuario);
 
   // Construir mensaje
@@ -525,7 +537,7 @@ async function agente(usuario, texto, imagenData) {
       for (const bloque of res.content) {
         if (bloque.type !== 'tool_use') continue;
 
-        const resultado = await ejecutarTool(bloque.name, bloque.input, imagenData);
+        const resultado = await ejecutarTool(bloque.name, bloque.input, imagenData, baseUrl);
 
         // Si generó o editó imagen, guardar la URL
         if (bloque.name === 'generar_imagen' || bloque.name === 'editar_foto') {
@@ -600,6 +612,12 @@ async function descargarImagen(url) {
 app.post('/webhook', async (req, res) => {
   res.status(200).end();
 
+  // Auto-detectar URL pública del bot desde el request entrante
+  if (!_baseUrl) {
+    _baseUrl = `https://${req.headers.host}`;
+    console.log('🌐 BASE_URL detectada:', _baseUrl);
+  }
+
   const { Body, From, NumMedia, MediaUrl0 } = req.body;
   const usuario = From;
   const texto   = (Body || '').trim();
@@ -672,7 +690,7 @@ No soy solo un bot — tengo criterio propio y te voy a desafiar cuando tenga un
     }
 
     // Llamar al agente
-    const resultado = await agente(usuario, texto, imagenData);
+    const resultado = await agente(usuario, texto, imagenData, _baseUrl);
 
     // Enviar texto
     if (resultado.texto) {
