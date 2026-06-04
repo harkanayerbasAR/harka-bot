@@ -6,7 +6,7 @@ const axios     = require('axios');
 const fetch     = require('node-fetch');
 const fs        = require('fs');
 const path      = require('path');
-const sharp     = require('sharp');
+const Jimp      = require('jimp');
 
 // ── MEMORIA PERSISTENTE (archivo JSON local) ──────────────────────────────────
 const MEMORIA_FILE = path.join('/tmp', 'harka-memoria.json');
@@ -267,55 +267,58 @@ const TOOLS = [
   }
 ];
 
-// ── EDICIÓN LOCAL DE FOTOS CON SHARP + SVG ───────────────────────────────────
-function xmlEsc(str) {
-  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
+// ── EDICIÓN LOCAL DE FOTOS CON JIMP (puro JavaScript, sin deps nativas) ───────
 async function editarFotoLocal(base64, mimeType, titulo, subtitulo, formato) {
   const isStory = formato === 'story';
   const W = 1080, H = isStory ? 1920 : 1080;
 
   const imgBuf = Buffer.from(base64, 'base64');
 
-  // Redimensionar foto cubriendo todo el canvas
-  const resized = await sharp(imgBuf)
-    .resize(W, H, { fit: 'cover', position: 'centre' })
-    .toBuffer();
+  // Cargar y redimensionar con cover-fit
+  const img = await Jimp.read(imgBuf);
+  img.cover(W, H);
 
-  // Calcular overlay inferior
+  // Overlay oscuro en la parte inferior (pixel scan, sin SVG)
   const overlayH = Math.round(H * (isStory ? 0.38 : 0.42));
   const overlayY = H - overlayH;
+  const alpha = 0.82;
+  img.scan(0, overlayY, W, overlayH, function(x, y, idx) {
+    this.bitmap.data[idx]     = Math.round(this.bitmap.data[idx]     * (1-alpha) + 14 * alpha);
+    this.bitmap.data[idx + 1] = Math.round(this.bitmap.data[idx + 1] * (1-alpha) + 35 * alpha);
+    this.bitmap.data[idx + 2] = Math.round(this.bitmap.data[idx + 2] * (1-alpha) + 16 * alpha);
+  });
 
-  // Tamaños de fuente
-  const titleSz  = isStory ? 70 : 56;
-  const subSz    = isStory ? 28 : 22;
-  const handleSz = isStory ? 24 : 18;
+  // Cargar fuentes bitmap (incluidas en jimp, sin descarga)
+  const fontGrande  = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+  const fontMediana = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
 
-  // Posiciones Y (baseline del texto, dentro del overlay)
-  const titleY  = overlayY + Math.round(overlayH * 0.35) + titleSz;
-  const subY    = overlayY + Math.round(overlayH * 0.60) + subSz;
-  const handleY = overlayY + Math.round(overlayH * 0.82) + handleSz;
+  const margen = 60;
+  const anchoTexto = W - margen * 2;
 
-  const cx = Math.round(W / 2);
+  // Título principal
+  img.print(fontGrande, margen, overlayY + Math.round(overlayH * 0.12), {
+    text: titulo,
+    alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+    alignmentY: Jimp.VERTICAL_ALIGN_TOP
+  }, anchoTexto, Math.round(overlayH * 0.45));
 
-  const svgLines = [
-    `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">`,
-    // Overlay oscuro
-    `<rect x="0" y="${overlayY}" width="${W}" height="${overlayH}" fill="#0E2310" fill-opacity="0.82"/>`,
-    // Título
-    `<text x="${cx}" y="${titleY}" font-family="Georgia,serif" font-size="${titleSz}" fill="#F2EBD9" text-anchor="middle" font-style="italic">${xmlEsc(titulo)}</text>`,
-    // Subtítulo (opcional)
-    subtitulo ? `<text x="${cx}" y="${subY}" font-family="Arial,sans-serif" font-size="${subSz}" fill="#D4A24C" text-anchor="middle">${xmlEsc(subtitulo)}</text>` : '',
-    // Handle
-    `<text x="${cx}" y="${handleY}" font-family="Arial,sans-serif" font-size="${handleSz}" fill="#F2EBD9" text-anchor="middle">@harkanaar</text>`,
-    `</svg>`
-  ].join('\n');
+  // Subtítulo (si existe)
+  if (subtitulo) {
+    img.print(fontMediana, margen, overlayY + Math.round(overlayH * 0.57), {
+      text: subtitulo,
+      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+      alignmentY: Jimp.VERTICAL_ALIGN_TOP
+    }, anchoTexto, Math.round(overlayH * 0.22));
+  }
 
-  return sharp(resized)
-    .composite([{ input: Buffer.from(svgLines), top: 0, left: 0 }])
-    .jpeg({ quality: 87 })
-    .toBuffer();
+  // Handle @harkanaar
+  img.print(fontMediana, margen, overlayY + Math.round(overlayH * 0.82), {
+    text: '@harkanaar',
+    alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+    alignmentY: Jimp.VERTICAL_ALIGN_TOP
+  }, anchoTexto);
+
+  return img.getBufferAsync(Jimp.MIME_JPEG);
 }
 
 // ── SUBIR FOTO A URL PÚBLICA ──────────────────────────────────────────────────
